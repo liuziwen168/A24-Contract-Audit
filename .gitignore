@@ -16,6 +16,7 @@ logs/
 # Python build and test artifacts
 __pycache__/
 *.py[cod]
+*.pyo
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -27,3 +28,17 @@ venv/
 # Frontend dependencies and build output
 node_modules/
 dist/
+
+# AI 服务缓存
+model_cache/
+tmp_pdf/
+tmp_img/
+*.tmp
+test_sample_*.pdf
+test_sample_*.png
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
