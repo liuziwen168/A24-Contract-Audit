@@ -1,0 +1,29 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Contract uploads, generated reports, and runtime logs
+storage/uploads/
+storage/reports/
+uploads/
+reports/
+logs/
+
+# Python build and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Frontend dependencies and build output
+node_modules/
+dist/
