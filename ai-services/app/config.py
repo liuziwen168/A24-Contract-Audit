@@ -21,3 +21,4 @@ RETRY_DELAY = int(os.getenv("RETRY_DELAY", 2))  # 秒
 
 # 日志配置
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_FILE = os.getenv("LOG_FILE", None)  # 例如: "logs/app.log"

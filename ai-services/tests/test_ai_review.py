@@ -1,40 +1,44 @@
-# tests/test_ai_review.py
+# tests/test_json_cleaner.py
 
 import json
-from app.services.ai_review_service import get_ai_review_service
+from app.utils.json_cleaner import clean_json
 
 
-def test_full_review():
-    """测试完整审核"""
-    service = get_ai_review_service()
+def test_clean_json_markdown():
+    """测试清理Markdown代码块"""
     
-    # 测试合同文本
-    contract_text = """
-    采购合同
+    # 测试1: 带 ```json
+    text1 = '```json\n{"key": "value"}\n```'
+    result1 = clean_json(text1)
+    assert json.loads(result1) == {"key": "value"}
+    print("✅ 测试1通过: 清理 ```json")
     
-    甲方：北京科技有限公司
-    乙方：上海供应链有限公司
+    # 测试2: 带 ``` 
+    text2 = '```\n{"key": "value"}\n```'
+    result2 = clean_json(text2)
+    assert json.loads(result2) == {"key": "value"}
+    print("✅ 测试2通过: 清理 ```")
     
-    合同金额：500万元
+    # 测试3: 前后有解释文字
+    text3 = '这是AI返回的结果：\n{"key": "value"}\n请参考。'
+    result3 = clean_json(text3)
+    assert json.loads(result3) == {"key": "value"}
+    print("✅ 测试3通过: 清理解释文字")
     
-    签订日期：2024-01-15
+    # 测试4: 数组
+    text4 = '```json\n[{"key": "value1"}, {"key": "value2"}]\n```'
+    result4 = clean_json(text4)
+    assert len(json.loads(result4)) == 2
+    print("✅ 测试4通过: 清理数组")
     
-    合同期限：2024-02-01至2024-12-31
+    # 测试5: 空字符串
+    text5 = ""
+    result5 = clean_json(text5)
+    assert result5 == ""
+    print("✅ 测试5通过: 空字符串")
     
-    第一条 付款方式
-    乙方应在合同签订后30日内支付全部款项。
-    
-    第二条 违约责任
-    违约方应承担相应的法律责任。
-    """
-    
-    result = service.full_review(contract_text)
-    
-    print("=" * 50)
-    print("AI审核结果:")
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    print("=" * 50)
+    print("\n🎉 所有测试通过！")
 
 
 if __name__ == "__main__":
-    test_full_review()
+    test_clean_json_marker()
