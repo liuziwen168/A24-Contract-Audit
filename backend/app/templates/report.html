@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>{{ reportTitle }}</title>
+  <style>
+    @page { size: A4; margin: 18mm 16mm 20mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #18212f; font: 14px/1.65 Arial, "Noto Sans CJK SC", sans-serif; }
+    h1 { margin: 0 0 4px; font-size: 25px; color: #17365d; }
+    h2 { margin: 24px 0 9px; padding-bottom: 5px; border-bottom: 2px solid #dbe5f1; font-size: 18px; color: #17365d; }
+    h3 { margin: 16px 0 6px; font-size: 15px; }
+    .meta { color: #5b6675; margin-bottom: 18px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; background: #e8eef7; }
+    table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; table-layout: fixed; }
+    th, td { border: 1px solid #cdd6e1; padding: 7px 9px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+    th { width: 22%; background: #f3f6fa; }
+    .risk { break-inside: avoid; margin: 12px 0; padding: 12px; border-left: 4px solid #d9534f; background: #fafbfc; }
+    .risk.medium { border-left-color: #f0ad4e; }
+    .risk.low { border-left-color: #5bc0de; }
+    .label { font-weight: 700; color: #344050; }
+    .muted { color: #687385; }
+    .notice { padding: 10px 12px; background: #fff8e6; border: 1px solid #f1d89a; }
+    footer { margin-top: 26px; padding-top: 10px; border-top: 1px solid #d9e0e8; color: #687385; font-size: 12px; }
+    @media print { .risk { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+  <h1>{{ reportTitle }}</h1>
+  <div class="meta">报告编号：{{ reportNumber }} · 生成时间：{{ generatedAt }}</div>
+
+  <h2>合同与审核概览</h2>
+  <table>
+    <tr><th>合同名称</th><td>{{ contract.name }}</td><th>合同类型</th><td>{{ contract.contractType }}</td></tr>
+    <tr><th>甲方</th><td>{{ contract.partyA }}</td><th>乙方</th><td>{{ contract.partyB }}</td></tr>
+    <tr><th>签署日期</th><td>{{ contract.signingDate }}</td><th>合同金额</th><td>{{ contract.contractAmount }}</td></tr>
+    <tr><th>履行期限</th><td>{{ contract.performanceTerm }}</td><th>争议解决</th><td>{{ contract.disputeResolution }}</td></tr>
+    <tr><th>审核状态</th><td>{{ review.reviewStatus }}/{{ review.reviewStage }}</td><th>总体风险</th><td><span class="badge">{{ review.overallRiskLevel }} / {{ review.overallScore }}</span></td></tr>
+    <tr><th>法务复核</th><td>{{ review.legalReviewer }} · {{ review.legalReviewedAt }}</td><th>风控复核</th><td>{{ review.riskReviewer }} · {{ review.riskReviewedAt }}</td></tr>
+  </table>
+
+  <h2>当前有效风险</h2>
+  <p>共 {{ riskSummary.total }} 项：高 {{ riskSummary.high }}、中 {{ riskSummary.medium }}、低 {{ riskSummary.low }}。已忽略风险 {{ riskSummary.dismissed }} 项，不计入当前有效风险。</p>
+  {% if risks %}
+    {% for risk in risks %}
+      <section class="risk {{ risk.riskLevel }}">
+        <h3>{{ loop.index }}. {{ risk.riskName }}（{{ risk.riskLevel }}）</h3>
+        <div><span class="label">风险类型：</span>{{ risk.riskType }}</div>
+        <div><span class="label">原文位置：</span>第 {{ risk.page }} 页 / 段落 {{ risk.paragraphIndex }}</div>
+        <div><span class="label">风险条款：</span>{{ risk.clauseText }}</div>
+        <div><span class="label">风险依据：</span>{{ risk.basis }}</div>
+        <div><span class="label">修改建议：</span>{{ risk.suggestion }}</div>
+      </section>
+    {% endfor %}
+  {% else %}
+    <p class="muted">当前没有有效风险。</p>
+  {% endif %}
+
+  <h2>标准条款比对</h2>
+  <p><span class="label">缺失条款：</span>{{ missingClauses | join('、') if missingClauses else '无' }}</p>
+  {% if deviations %}<p><span class="label">偏差说明：</span>{{ deviations }}</p>{% endif %}
+
+  <h2>审核说明</h2>
+  <p>{{ reviewNote }}</p>
+  <div class="notice">免责声明：本报告由智能审核与人工复核结果汇总生成，仅供企业内部风险识别与决策参考，不构成正式法律意见。</div>
+  <footer>报告编号 {{ reportNumber }} · A24 企业合同智能审核系统</footer>
+</body>
+</html>

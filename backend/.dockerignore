@@ -1,0 +1,17 @@
+.env
+.env.*
+*.pem
+*.key
+*.p12
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+pytest-*
+tests
+storage
+uploads
+reports
+logs
