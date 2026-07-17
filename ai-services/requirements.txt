@@ -446,3 +446,31 @@ zict @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/zict_169954
 zipp @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/zipp_1707493775475/work
 zope.interface @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/zope.interface_1699497164709/work
 zstandard @ file:///C:/b/abs_82dff2ths3/croot/zstandard_1728569207191/work
+
+# ============================================================
+# AI合同审核服务新增依赖
+# ============================================================
+# 文档解析
+python-docx>=1.0.0          # DOCX 解析（已有 1.2.0）
+pdfplumber>=0.11.0          # PDF 解析（已有 0.11.9）
+PyPDF2>=3.0.0               # PDF 备用解析（已有 3.0.1）
+PyMuPDF>=1.23.0             # PDF 双重解析方案
+pypdfium2>=4.0.0            # PDF 渲染（已有 5.9.0）
+
+# OCR（可选，用于图片识别）
+# PaddleOCR>=2.7.0          # PaddleOCR 中文识别（需单独安装）
+# paddlepaddle>=3.0.0       # PaddlePaddle 深度学习框架（需单独安装）
+opencv-python-headless>=4.5.0  # OpenCV 图像预处理（OCR依赖）
+
+# AI 服务
+openai>=1.0.0               # OpenAI SDK（已有 2.45.0）
+dashscope>=1.20.0           # 阿里云 DashScope SDK（已有 1.26.3）
+
+# Web 框架
+fastapi>=0.100.0            # FastAPI（已有 0.139.0）
+uvicorn>=0.20.0             # Uvicorn（已有 0.51.0）
+python-multipart>=0.0.5     # 文件上传支持（已有 0.0.28）
+
+# 数据处理
+pydantic>=2.0.0             # Pydantic（已有 2.13.4）
+python-dotenv>=1.0.0        # 环境变量管理（已有 1.2.2）

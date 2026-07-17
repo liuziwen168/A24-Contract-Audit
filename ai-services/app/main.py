@@ -11,6 +11,8 @@ from app.api.extract import router as extract_router
 from app.api.risk import router as risk_router
 from app.api.review import router as review_router
 from app.api.internal_review import router as internal_review_router
+from app.api.parse import router as parse_router
+from app.api.clause_compare import router as clause_compare_router
 
 # 导入配置
 from app.config import SERVER_HOST, SERVER_PORT, LOG_LEVEL, LOG_FILE
@@ -49,36 +51,51 @@ app = FastAPI(
     version="0.1.0",
     description="""
     ## 合同智能审核AI服务
-    
+
     基于通义千问大模型，提供合同智能审核能力。
-    
+
     ### 功能列表
-    - **合同分类**：识别合同类型
-    - **要素提取**：提取甲方、乙方、金额等关键信息
-    - **风险评估**：识别合同风险点并给出修改建议
-    - **完整审核**：一站式完成分类、提取、风险评估
-    
+    - **文档解析**：DOCX/PDF/图片解析，OCR识别，保留页码段落信息
+    - **合同分类**：识别6类合同类型，返回置信度
+    - **要素提取**：提取甲方、乙方、金额等6项要素（含置信度与位置）
+    - **风险评估**：识别≥10类风险，给出等级、原文、位置、依据和建议
+    - **标准条款比对**：与标准条款库比对，发现偏离和缺失
+    - **完整审核**：一站式完成分类、提取、风险和条款比对
+
     ### 技术特性
     - ✅ 统一错误处理
     - ✅ 请求链路追踪（Request ID）
     - ✅ 结构化日志
     - ✅ AI输出清洗与验证
-    - ✅ 自动重试机制
+    - ✅ 自动重试机制（指数退避，最多3次）
+    - ✅ 数据验证（Pydantic Schema + 自定义校验器）
     """,
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_tags=[
         {
+            "name": "文档解析",
+            "description": "上传合同文档，返回结构化解析结果"
+        },
+        {
             "name": "合同分类",
-            "description": "识别合同所属类型"
+            "description": "识别合同所属类型及置信度"
         },
         {
             "name": "合同要素提取",
-            "description": "从合同中提取结构化信息"
+            "description": "提取甲方、乙方、金额等6项关键要素（含置信度与位置）"
         },
         {
             "name": "合同风险评估",
-            "description": "识别风险点并给出建议"
+            "description": "识别≥10类风险，输出等级、原文、位置、依据和建议"
+        },
+        {
+            "name": "标准条款比对",
+            "description": "与标准条款库比对，发现偏离条款和缺失条款"
+        },
+        {
+            "name": "合同完整审核",
+            "description": "一键完成分类、提取、风险和条款比对的全流程审核"
         },
         {
             "name": "internal",
@@ -156,6 +173,20 @@ app.include_router(
 app.include_router(
     internal_review_router,
     tags=["internal"]
+)
+
+# 文档解析
+app.include_router(
+    parse_router,
+    prefix="/api/v1",
+    tags=["文档解析"]
+)
+
+# 标准条款比对
+app.include_router(
+    clause_compare_router,
+    prefix="/api/v1",
+    tags=["标准条款比对"]
 )
 
 # ============================================================

@@ -41,4 +41,4 @@ def test_clean_json_markdown():
 
 
 if __name__ == "__main__":
-    test_clean_json_marker()
+    test_clean_json_markdown()
