@@ -52,3 +52,11 @@ def save_upload(contract_id: int, original_name: str, content: bytes) -> tuple[s
     path = target / f"{digest}_{safe_name(original_name)}"
     path.write_bytes(content)
     return str(path), digest
+
+
+def upload_path(stored_path: str) -> Path:
+    root = settings.upload_root.resolve()
+    path = Path(stored_path).resolve()
+    if root not in path.parents:
+        raise fail("CONTRACT_FILE_NOT_FOUND")
+    return path

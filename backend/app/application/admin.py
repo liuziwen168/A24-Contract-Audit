@@ -25,6 +25,7 @@ from app.models.entities import (
 )
 
 ADMIN_ACTIONS = {
+    "userCreated": "ADMIN_USER_CREATED",
     "userUpdated": "ADMIN_USER_UPDATED",
     "clauseCreated": "STANDARD_CLAUSE_CREATED",
     "clauseUpdated": "STANDARD_CLAUSE_UPDATED",
@@ -75,6 +76,8 @@ def public_rule(rule: RiskRule) -> dict[str, Any]:
         "ruleContent": rule.rule_content,
         "standardClauseId": rule.standard_clause_id,
         "configStatus": rule.status,
+        "warningEnabled": rule.warning_enabled,
+        "warningDueHours": rule.warning_due_hours,
         "version": rule.version,
         "createdAt": rule.created_at,
         "updatedAt": rule.updated_at,

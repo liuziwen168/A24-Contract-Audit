@@ -11,7 +11,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.core.security import create_token
+from app.core.security import create_token, verify_password
 from app.infrastructure import db as db_module
 from app.main import app
 from app.models.entities import (
@@ -327,6 +327,46 @@ def test_user_management_filters_updates_and_audit(m31) -> None:
     assert log and log.detail_json["beforeValue"]["username"] == "target"
     assert log.detail_json["afterValue"]["username"] == "reviewed"
     db.close()
+
+
+def test_admin_can_create_user_with_hashed_password_and_audit(m31) -> None:
+    client, sessions = m31
+    created = client.post(
+        "/api/v1/users",
+        headers=auth(4),
+        json={"username": " new-user ", "password": "1234", "role": "legalReviewer"},
+    )
+    assert created.status_code == 200
+    data = created.json()["data"]
+    assert data["username"] == "new-user"
+    assert data["role"] == "legalReviewer"
+    assert data["userStatus"] == "active"
+    assert "password" not in str(data).lower()
+
+    db = sessions()
+    target = db.scalar(select(User).where(User.username == "new-user"))
+    assert target is not None
+    assert target.password_hash != "1234"
+    assert verify_password("1234", target.password_hash)
+    log = db.scalar(select(OperationLog).where(OperationLog.action == "ADMIN_USER_CREATED"))
+    assert log and log.detail_json["afterValue"]["username"] == "new-user"
+    db.close()
+
+    duplicate = client.post(
+        "/api/v1/users",
+        headers=auth(4),
+        json={"username": "new-user", "password": "1234", "role": "user"},
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["code"] == "USER_USERNAME_EXISTS"
+
+    denied = client.post(
+        "/api/v1/users",
+        headers=auth(1),
+        json={"username": "not-allowed", "password": "1234", "role": "user"},
+    )
+    assert denied.status_code == 403
+    assert denied.json()["code"] == "PERMISSION_DENIED"
 
 
 def test_user_update_and_log_are_atomic(m31) -> None:

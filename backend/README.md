@@ -1,5 +1,29 @@
 # A24 Contract Audit Backend
 
+## Integration quick start (M3.3)
+
+Current Alembic head: `20260729_0005`.
+
+```powershell
+cd backend
+Copy-Item .env.example .env
+# Set DATABASE_URL, JWT_SECRET and all DEMO_*_PASSWORD values in .env.
+python -m pip install -e ".[dev]"
+python -m alembic upgrade head
+python -m app.init_demo
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+```
+
+Create an empty local MySQL database such as `a24_dev_integration` using `utf8mb4`; never use historical acceptance databases. `app.init_demo` is repeatable and creates local-only `demo_user`, `demo_legal`, `demo_risk`, and `demo_admin`; their passwords are supplied only by `DEMO_*_PASSWORD` variables and must never be used in production.
+
+Health: `http://127.0.0.1:8000/health`; Swagger: `/docs`; OpenAPI: `/openapi.json` when `OPENAPI_ENABLED=true`. All business routes are under `/api/v1` and require `Authorization: Bearer <accessToken>`.
+
+For browser integration, set comma-separated `CORS_ORIGINS`; do not use `*` with credentials. Keep `TASK_EXECUTOR_ENABLED=false` and `REPORT_EXECUTOR_ENABLED=false` unless the existing AI mock/service is intentionally running. `UPLOAD_ROOT` and `REPORT_ROOT` are writable local directories and are ignored by Git.
+
+Run full checks with `ruff check app tests alembic`, `pytest -q -p no:cacheprovider --basetemp .tmp/pytest`, `git diff --check`, and `alembic heads`. If startup fails, verify the database was migrated, port 8000 is free, CORS matches the frontend origin, the AI executor is disabled or mock is reachable, and local JWT/demo-password variables are set.
+
+The live OpenAPI schema and `docs/04-前后端接口文档.md` are the API handoff source. M3.3 routes cover warning list/detail, legal confirm/withdraw, risk activate/waive/close/reopen, acknowledge, and remediation via `POST /reviews` with `sourceWarningId`. Users only see their `active`/`processing` warnings; candidate warnings are hidden and `overdue` is read-only.
+
 Python 3.11+、FastAPI、SQLAlchemy 2、Alembic 和 MySQL 8 业务后端。当前数据库 head 为 `20260713_0004`。
 
 ## 本地启动

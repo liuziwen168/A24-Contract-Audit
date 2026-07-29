@@ -21,7 +21,9 @@ from app.models.entities import (
     ReviewRecord,
     RiskRecord,
     RiskRule,
+    RiskWarning,
     StandardClause,
+    WarningAction,
     utcnow,
 )
 from app.schemas.ai import AIReviewResult
@@ -174,6 +176,8 @@ class ReviewExecutor:
                     "clauseType": item.clause_type,
                     "content": item.content,
                     "version": item.version,
+                    "warningEnabled": item.warning_enabled,
+                    "warningDueHours": item.warning_due_hours,
                 }
                 for item in clauses
             ]
@@ -186,6 +190,8 @@ class ReviewExecutor:
                     "riskLevel": item.risk_level,
                     "ruleContent": item.rule_content,
                     "version": item.version,
+                    "warningEnabled": item.warning_enabled,
+                    "warningDueHours": item.warning_due_hours,
                 }
                 for item in rules
             }
@@ -249,6 +255,10 @@ class ReviewExecutor:
             ):
                 db.rollback()
                 return
+            contract = db.get(Contract, review.contract_id)
+            if contract is None:
+                db.rollback()
+                return
             for element in result.elements:
                 db.add(
                     ContractElement(
@@ -263,9 +273,9 @@ class ReviewExecutor:
                         source="ai",
                     )
                 )
+            persisted_risks: list[RiskRecord] = []
             for risk in result.risks:
-                db.add(
-                    RiskRecord(
+                persisted = RiskRecord(
                         review_id=review.id,
                         rule_id=risk.rule_id,
                         rule_snapshot=snapshots.get(risk.rule_id) if risk.rule_id else None,
@@ -279,6 +289,48 @@ class ReviewExecutor:
                         suggestion=risk.suggestion,
                         confidence=risk.confidence,
                         status="active",
+                )
+                db.add(persisted)
+                persisted_risks.append(persisted)
+            db.flush()
+            for risk in persisted_risks:
+                snapshot = snapshots.get(risk.rule_id) if risk.rule_id else None
+                if not snapshot or not snapshot.get("warningEnabled"):
+                    continue
+                key_source = f"{review.id}:{risk.id}:{snapshot['ruleId']}:{snapshot['version']}"
+                warning_key = hashlib.sha256(key_source.encode()).hexdigest()
+                source_snapshot = {
+                    "rule": snapshot,
+                    "risk": {
+                        "riskId": risk.id,
+                        "riskType": risk.risk_type,
+                        "riskName": risk.risk_name,
+                        "riskLevel": risk.risk_level,
+                        "clauseText": risk.clause_text,
+                        "page": risk.page,
+                        "paragraphIndex": risk.paragraph_index,
+                        "basis": risk.basis,
+                        "suggestion": risk.suggestion,
+                        "confidence": str(risk.confidence) if risk.confidence is not None else None,
+                    },
+                }
+                warning = RiskWarning(
+                    warning_key=warning_key,
+                    source_review_id=review.id,
+                    source_risk_id=risk.id,
+                    contract_id=review.contract_id,
+                    owner_id=contract.owner_id,
+                    warning_level=risk.risk_level,
+                    source_snapshot=source_snapshot,
+                )
+                db.add(warning)
+                db.flush()
+                db.add(
+                    WarningAction(
+                        warning_id=warning.id,
+                        action_type="candidateCreated",
+                        from_status=None,
+                        to_status="pendingLegal",
                     )
                 )
             review.ai_result_json = result.model_dump(by_alias=True, mode="json")

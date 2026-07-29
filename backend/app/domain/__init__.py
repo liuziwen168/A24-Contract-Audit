@@ -6,6 +6,15 @@ REVIEW_STATUSES = {"pending", "processing", "completed", "failed", "cancelled"}
 REVIEW_STAGES = {"aiReview", "legalReview", "riskReview", "completed"}
 REVIEW_MODES = {"full", "rulesOnly"}
 RISK_LEVELS = {"high", "medium", "low"}
+WARNING_STATUSES = {
+    "pendingLegal",
+    "pendingRisk",
+    "active",
+    "processing",
+    "closed",
+    "withdrawn",
+    "waived",
+}
 RISK_TYPES = {
     "unlimitedLiability",
     "excessiveLiquidatedDamages",

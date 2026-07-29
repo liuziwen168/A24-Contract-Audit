@@ -112,6 +112,9 @@ class ReviewRecord(AuditMixin, Base):
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     request_id: Mapped[str] = mapped_column(String(64), nullable=False)
     review_mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_warning_id: Mapped[int | None] = mapped_column(
+        ForeignKey("risk_warning.id", name="fk_review_source_warning", use_alter=True)
+    )
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     review_stage: Mapped[str] = mapped_column(String(20), default="aiReview", nullable=False)
     ai_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -185,7 +188,52 @@ class RiskRule(AuditMixin, Base):
     rule_content: Mapped[str] = mapped_column(Text, nullable=False)
     standard_clause_id: Mapped[int | None] = mapped_column(ForeignKey("standard_clause.id"))
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    warning_enabled: Mapped[bool] = mapped_column(default=False, nullable=False)
+    warning_due_hours: Mapped[int | None] = mapped_column()
     version: Mapped[str] = mapped_column(String(32), default="v0.1", nullable=False)
+
+
+class RiskWarning(AuditMixin, Base):
+    __tablename__ = "risk_warning"
+    __table_args__ = (
+        UniqueConstraint("warning_key", name="uk_warning_key"),
+        Index("idx_warning_owner_status_due", "owner_id", "warning_status", "due_at"),
+        Index("idx_warning_contract_status", "contract_id", "warning_status"),
+        Index("idx_warning_source_review_status", "source_review_id", "warning_status"),
+        Index("idx_warning_remediation_review", "remediation_review_id"),
+    )
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    warning_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_review_id: Mapped[int] = mapped_column(ForeignKey("review_record.id"), nullable=False)
+    source_risk_id: Mapped[int] = mapped_column(ForeignKey("risk_record.id"), nullable=False)
+    contract_id: Mapped[int] = mapped_column(ForeignKey("contract.id"), nullable=False)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("user.id"), nullable=False)
+    warning_type: Mapped[str] = mapped_column(String(40), default="riskRuleHit", nullable=False)
+    warning_level: Mapped[str] = mapped_column(String(10), nullable=False)
+    warning_status: Mapped[str] = mapped_column(String(20), default="pendingLegal", nullable=False)
+    source_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    remediation_review_id: Mapped[int | None] = mapped_column(ForeignKey("review_record.id"))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WarningAction(AuditMixin, Base):
+    __tablename__ = "warning_action"
+    __table_args__ = (
+        Index("idx_warning_action_warning_created", "warning_id", "created_at"),
+        Index("idx_warning_action_actor_created", "actor_id", "created_at"),
+    )
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    warning_id: Mapped[int] = mapped_column(ForeignKey("risk_warning.id"), nullable=False)
+    action_type: Mapped[str] = mapped_column("action", String(40), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(String(20))
+    to_status: Mapped[str | None] = mapped_column(String(20))
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
+    actor_role: Mapped[str | None] = mapped_column(String(20))
+    comment: Mapped[str | None] = mapped_column(Text)
+    remediation_review_id: Mapped[int | None] = mapped_column(ForeignKey("review_record.id"))
+    detail_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
 class ReviewRevision(AuditMixin, Base):

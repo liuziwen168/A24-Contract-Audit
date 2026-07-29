@@ -32,6 +32,7 @@ class ReviewIn(Schema):
     contract_id: int
     contract_file_id: int
     review_mode: Literal["full", "rulesOnly"]
+    source_warning_id: int | None = None
 
     @field_validator("review_mode")
     @classmethod
@@ -40,9 +41,9 @@ class ReviewIn(Schema):
             raise ValueError("unsupported reviewMode")
         return value
 
-    @field_validator("contract_id", "contract_file_id")
+    @field_validator("contract_id", "contract_file_id", "source_warning_id")
     @classmethod
     def positive_id(cls, value: int) -> int:
-        if value <= 0:
+        if value is not None and value <= 0:
             raise ValueError("identifier must be positive")
         return value

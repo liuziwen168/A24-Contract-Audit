@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from copy import deepcopy
 from decimal import Decimal
 
 import pytest
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.security import create_token
+from app.core.config import settings
 from app.infrastructure import db as db_module
 from app.main import app
 from app.models.entities import (
@@ -171,6 +173,36 @@ def m22() -> Generator[tuple[TestClient, sessionmaker[Session]], None, None]:
         Base.metadata.drop_all(engine)
 
 
+def _manual_write_state(
+    sessions: sessionmaker[Session], review_id: int
+) -> dict[str, object]:
+    db = sessions()
+    try:
+        review = db.get(ReviewRecord, review_id)
+        assert review is not None
+        return {
+            "reviewers": (review.legal_reviewer_id, review.risk_reviewer_id),
+            "status": review.status,
+            "stage": review.review_stage,
+            "ai_result": deepcopy(review.ai_result_json),
+            "revisions": db.scalar(
+                select(func.count())
+                .select_from(ReviewRevision)
+                .where(ReviewRevision.review_id == review_id)
+            ),
+            "logs": db.scalar(
+                select(func.count())
+                .select_from(OperationLog)
+                .where(
+                    OperationLog.resource_type == "review",
+                    OperationLog.resource_id == review_id,
+                )
+            ),
+        }
+    finally:
+        db.close()
+
+
 def test_permissions_claim_and_append_only_effective_result(m22) -> None:
     client, sessions = m22
     assert (
@@ -217,6 +249,133 @@ def test_permissions_claim_and_append_only_effective_result(m22) -> None:
     assert db.get(ContractElement, 1).value_text == "AI甲方"
     assert db.scalar(select(func.count()).select_from(ReviewRevision)) == 2
     db.close()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"riskStatus": "active"},
+        {"riskStatus": "modified"},
+        {"riskStatus": "dismissed"},
+        {"riskLevel": "low", "riskStatus": None},
+    ],
+)
+def test_legal_risk_status_patch_is_rejected_without_side_effects(m22, payload) -> None:
+    client, sessions = m22
+    before = _manual_write_state(sessions, 1)
+
+    response = client.patch("/api/v1/risks/1", headers=auth(3, "legalReviewer"), json=payload)
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "REVIEW_ROLE_NOT_ALLOWED"
+    assert _manual_write_state(sessions, 1) == before
+
+
+def test_legal_can_revise_risk_level_and_suggestion_but_not_overall_risk(m22) -> None:
+    client, sessions = m22
+    legal = auth(3, "legalReviewer")
+    revised = client.patch(
+        "/api/v1/risks/1",
+        headers=legal,
+        json={"riskLevel": "low", "suggestion": "legal suggestion"},
+    )
+    assert revised.status_code == 200
+    detail = client.get("/api/v1/reviews/1", headers=legal).json()["data"]
+    risk = detail["effectiveResult"]["risks"][0]
+    assert risk["riskLevel"] == "low"
+    assert risk["suggestion"] == "legal suggestion"
+    assert risk["riskStatus"] == "active"
+
+    before = _manual_write_state(sessions, 1)
+    denied = client.patch(
+        "/api/v1/reviews/1/overall-risk",
+        headers=legal,
+        json={"overallRiskLevel": "low", "overallScore": "10.25"},
+    )
+    assert denied.status_code == 403
+    assert denied.json()["code"] == "REVIEW_ROLE_NOT_ALLOWED"
+    assert _manual_write_state(sessions, 1) == before
+
+
+def test_risk_manual_write_matrix(m22) -> None:
+    client, sessions = m22
+    legal = auth(3, "legalReviewer")
+    risk = auth(5, "riskReviewer")
+
+    before = _manual_write_state(sessions, 1)
+    wrong_stage = client.patch(
+        "/api/v1/risks/1", headers=risk, json={"riskLevel": "low"}
+    )
+    assert wrong_stage.status_code == 409
+    assert wrong_stage.json()["code"] == "REVIEW_STAGE_INVALID"
+    assert _manual_write_state(sessions, 1) == before
+
+    assert client.post("/api/v1/reviews/1/legal-confirm", headers=legal, json={}).status_code == 200
+
+    for path, payload in [
+        ("/api/v1/reviews/1/contract-type", {"contractType": "nda"}),
+        ("/api/v1/reviews/1/elements/1", {"value": "risk cannot edit"}),
+    ]:
+        before = _manual_write_state(sessions, 1)
+        denied = client.patch(path, headers=risk, json=payload)
+        assert denied.status_code == 403
+        assert denied.json()["code"] == "REVIEW_ROLE_NOT_ALLOWED"
+        assert _manual_write_state(sessions, 1) == before
+
+    before = _manual_write_state(sessions, 1)
+    wrong_stage = client.patch(
+        "/api/v1/risks/1", headers=legal, json={"riskLevel": "low"}
+    )
+    assert wrong_stage.status_code == 409
+    assert wrong_stage.json()["code"] == "REVIEW_STAGE_INVALID"
+    assert _manual_write_state(sessions, 1) == before
+
+    revised = client.patch(
+        "/api/v1/risks/1",
+        headers=risk,
+        json={
+            "riskLevel": "low",
+            "suggestion": "risk suggestion",
+            "riskStatus": "dismissed",
+        },
+    )
+    assert revised.status_code == 200
+    overall = client.patch(
+        "/api/v1/reviews/1/overall-risk",
+        headers=risk,
+        json={"overallRiskLevel": "low", "overallScore": "10.25"},
+    )
+    assert overall.status_code == 200
+    detail = client.get("/api/v1/reviews/1", headers=risk).json()["data"]
+    assert detail["effectiveResult"]["risks"][0]["riskStatus"] == "dismissed"
+    assert detail["effectiveResult"]["overallRiskLevel"] == "low"
+
+
+@pytest.mark.parametrize("user_id, role", [(1, "user"), (7, "admin")])
+def test_user_and_admin_manual_writes_and_confirms_are_side_effect_free(m22, user_id, role) -> None:
+    client, sessions = m22
+    headers = auth(user_id, role)
+    for path, payload in [
+        ("/api/v1/reviews/1/contract-type", {"contractType": "nda"}),
+        ("/api/v1/reviews/1/elements/1", {"value": "not allowed"}),
+        ("/api/v1/risks/1", {"riskStatus": "dismissed"}),
+        (
+            "/api/v1/reviews/1/overall-risk",
+            {"overallRiskLevel": "low", "overallScore": "10.25"},
+        ),
+    ]:
+        before = _manual_write_state(sessions, 1)
+        denied = client.patch(path, headers=headers, json=payload)
+        assert denied.status_code == 403
+        assert denied.json()["code"] == "REVIEW_ROLE_NOT_ALLOWED"
+        assert _manual_write_state(sessions, 1) == before
+
+    for path in ("/api/v1/reviews/1/legal-confirm", "/api/v1/reviews/1/risk-confirm"):
+        before = _manual_write_state(sessions, 1)
+        denied = client.post(path, headers=headers, json={})
+        assert denied.status_code == 403
+        assert denied.json()["code"] == "REVIEW_ROLE_NOT_ALLOWED"
+        assert _manual_write_state(sessions, 1) == before
 
 
 def test_feedback_validation_rolls_back_claim(m22) -> None:
@@ -312,6 +471,38 @@ def test_data_scopes_risk_detail_and_no_storage_path(m22) -> None:
     db = sessions()
     assert db.get(ReviewRecord, 1).legal_reviewer_id == 3
     db.close()
+
+
+def test_reviewer_can_download_authorized_contract_file_only(m22, tmp_path) -> None:
+    client, sessions = m22
+    original_root = settings.upload_root
+    settings.__dict__["upload_root"] = tmp_path
+    file_path = tmp_path / "private" / "one.pdf"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_bytes(b"%PDF-test")
+    db = sessions()
+    stored = db.get(ContractFile, 1)
+    assert stored is not None
+    stored.storage_path = str(file_path)
+    db.commit()
+    db.close()
+    try:
+        response = client.get(
+            "/api/v1/contracts/1/files/1/download",
+            headers=auth(3, "legalReviewer"),
+        )
+        assert response.status_code == 200
+        assert response.content == b"%PDF-test"
+        assert response.headers["content-type"].startswith("application/pdf")
+        assert (
+            client.get(
+                "/api/v1/contracts/1/files/1/download",
+                headers=auth(2, "user"),
+            ).json()["code"]
+            == "CONTRACT_NOT_FOUND"
+        )
+    finally:
+        settings.__dict__["upload_root"] = original_root
 
 
 def test_revision_order_cross_review_targets_and_stable_reads(m22) -> None:

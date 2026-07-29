@@ -24,7 +24,9 @@ from app.models.entities import (
     ReviewRecord,
     RiskRecord,
     RiskRule,
+    RiskWarning,
     User,
+    WarningAction,
     utcnow,
 )
 from app.schemas.ai import AIReviewResult
@@ -182,6 +184,31 @@ def test_pending_task_is_claimed_and_persisted_atomically(review_db) -> None:
     assert db.scalar(select(RiskRecord).where(RiskRecord.review_id == 1)) is not None
     db.close()
     assert client.calls[0]["requestId"] == client.calls[0]["requestId"]
+
+
+def test_warning_enabled_rule_creates_one_candidate_warning(review_db) -> None:
+    sessions, _ = review_db
+    db = sessions()
+    rule = db.get(RiskRule, 1)
+    assert rule is not None
+    rule.warning_enabled = True
+    db.commit()
+    db.close()
+    executor = ReviewExecutor(FakeAIClient(response()), sessions, no_wait)
+    assert asyncio.run(executor.run_once())
+    db = sessions()
+    warning = db.scalar(select(RiskWarning).where(RiskWarning.source_review_id == 1))
+    assert warning is not None
+    assert warning.warning_status == "pendingLegal"
+    assert warning.warning_key
+    assert db.scalar(
+        select(WarningAction).where(
+            WarningAction.warning_id == warning.id,
+            WarningAction.action_type == "candidateCreated",
+        )
+    ) is not None
+    db.close()
+    assert not asyncio.run(executor.run_once())
 
 
 def test_database_conditional_claim_prevents_double_claim(review_db) -> None:

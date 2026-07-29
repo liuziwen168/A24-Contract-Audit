@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.errors import AppError, fail
 from app.core.request_id import new_request_id, request_id
-from app.core.security import create_token, decode_token, verify_password
+from app.core.security import create_token, decode_token, hash_password, verify_password
 from app.application.manual_review import (
     LEGAL,
     RISK,
@@ -37,9 +37,23 @@ from app.application.admin import (
     require_admin,
 )
 from app.application.reports import report_path, safe_download_name
-from app.domain import RISK_LEVELS, RISK_TYPES, ROLES, USER_STATUSES, CONTRACT_TYPES
+from app.application.warnings import (
+    acknowledge as warning_acknowledge,
+    begin_remediation,
+    close as warning_close,
+    legal_confirm as warning_legal_confirm,
+    legal_withdraw as warning_legal_withdraw,
+    reopen as warning_reopen,
+    risk_activate as warning_risk_activate,
+    scoped_warnings,
+    visible_warning,
+    waive as warning_waive,
+    warning_actions,
+    warning_payload,
+)
+from app.domain import CONTRACT_TYPES, RISK_LEVELS, RISK_TYPES, ROLES, USER_STATUSES, WARNING_STATUSES
 from app.infrastructure.db import get_db
-from app.infrastructure.files import file_type, save_upload
+from app.infrastructure.files import file_type, save_upload, upload_path
 from app.models.entities import (
     Contract,
     ContractFile,
@@ -49,6 +63,7 @@ from app.models.entities import (
     ReviewFeedback,
     ReviewRecord,
     RiskRecord,
+    RiskWarning,
     RiskRule,
     StandardClause,
     User,
@@ -60,6 +75,7 @@ from app.schemas.admin import (
     RiskRuleUpdateIn,
     StandardClauseCreateIn,
     StandardClauseUpdateIn,
+    UserCreateIn,
     UserUpdateIn,
 )
 from app.schemas.review import (
@@ -71,6 +87,7 @@ from app.schemas.review import (
     RiskIn,
 )
 from app.schemas.report import ReportCreateIn
+from app.schemas.warning import WarningActivateIn, WarningCommentIn, WarningReopenIn
 
 router = APIRouter(prefix="/api/v1")
 Db = Annotated[Session, Depends(get_db)]
@@ -283,6 +300,38 @@ def get_contract(
     )
 
 
+@router.get("/contracts/{contractId}/files/{contractFileId}/download")
+def download_contract_file(
+    contract_id: Annotated[int, Path(alias="contractId")],
+    contract_file_id: Annotated[int, Path(alias="contractFileId")],
+    user: CurrentUser,
+    db: Db,
+):
+    contract = accessible_contract(db, contract_id, user)
+    contract_file = db.scalar(
+        select(ContractFile).where(
+            ContractFile.id == contract_file_id,
+            ContractFile.contract_id == contract.id,
+        )
+    )
+    if contract_file is None:
+        raise fail("CONTRACT_FILE_NOT_FOUND")
+    path = upload_path(contract_file.storage_path)
+    if not path.is_file():
+        raise fail("CONTRACT_FILE_NOT_FOUND")
+    media_types = {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "image": "application/octet-stream",
+    }
+    return FileResponse(
+        path,
+        media_type=media_types.get(contract_file.file_type, "application/octet-stream"),
+        filename=contract_file.file_name,
+        content_disposition_type="attachment",
+    )
+
+
 @router.delete("/contracts/{contractId}")
 def delete_contract(
     contract_id: Annotated[int, Path(alias="contractId")], user: CurrentUser, db: Db
@@ -313,10 +362,16 @@ def create_review(
         )
     )
     if previous:
-        if (previous.contract_id, previous.contract_file_id, previous.review_mode) != (
+        if (
+            previous.contract_id,
+            previous.contract_file_id,
+            previous.review_mode,
+            previous.source_warning_id,
+        ) != (
             body.contract_id,
             body.contract_file_id,
             body.review_mode,
+            body.source_warning_id,
         ):
             raise fail("IDEMPOTENCY_CONFLICT")
         return result(
@@ -341,6 +396,21 @@ def create_review(
     )
     if not contract_file:
         raise fail("CONTRACT_FILE_NOT_FOUND")
+    warning = None
+    if body.source_warning_id is not None:
+        warning = db.scalar(
+            select(RiskWarning)
+            .where(RiskWarning.id == body.source_warning_id)
+            .with_for_update()
+        )
+        if warning is None or warning.owner_id != user.id:
+            raise fail("WARNING_NOT_FOUND")
+        if warning.contract_id != contract.id or warning.warning_status != "active":
+            raise fail("WARNING_STATUS_INVALID")
+        if warning.acknowledged_at is None:
+            raise fail("WARNING_ACKNOWLEDGEMENT_REQUIRED")
+        if warning.remediation_review_id is not None:
+            raise fail("WARNING_REMEDIATION_REVIEW_INVALID")
     running = db.scalar(
         select(ReviewRecord.id).where(
             ReviewRecord.contract_id == contract.id,
@@ -357,6 +427,7 @@ def create_review(
         idempotency_key=idempotency_key,
         request_id=new_request_id(),
         review_mode=body.review_mode,
+        source_warning_id=body.source_warning_id,
         status="pending",
         review_stage="aiReview",
         ai_warnings=[],
@@ -364,7 +435,14 @@ def create_review(
     )
     contract.status = "reviewing"
     db.add(review)
-    db.commit()
+    try:
+        db.flush()
+        if warning is not None:
+            begin_remediation(db, warning.id, user, contract.id, review)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return result(
         {
             "reviewId": review.id,
@@ -542,6 +620,130 @@ def _write(db: Session, fn):
         raise
 
 
+@router.get("/warnings")
+def list_warnings(
+    user: CurrentUser,
+    db: Db,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, alias="pageSize", ge=1, le=100),
+    warning_status: str | None = Query(None, alias="warningStatus"),
+) -> dict[str, object]:
+    if warning_status is not None and warning_status not in WARNING_STATUSES:
+        raise fail("PARAM_INVALID")
+    query = scoped_warnings(select(RiskWarning), user)
+    if warning_status is not None:
+        query = query.where(RiskWarning.warning_status == warning_status)
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    rows = db.scalars(
+        query.order_by(RiskWarning.created_at.desc(), RiskWarning.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    private = user.role in {LEGAL, RISK}
+    return result(
+        {"items": [warning_payload(db, row, private) for row in rows], "total": total}
+    )
+
+
+@router.get("/warnings/{warningId}")
+def get_warning(
+    warning_id: Annotated[int, Path(alias="warningId")], user: CurrentUser, db: Db
+) -> dict[str, object]:
+    warning = visible_warning(db, warning_id, user)
+    private = user.role in {LEGAL, RISK}
+    data = warning_payload(db, warning, private)
+    if private:
+        data["actions"] = warning_actions(db, warning.id)
+    return result(data)
+
+
+@router.post("/warnings/{warningId}/legal-confirm")
+def confirm_warning_legal(
+    warning_id: Annotated[int, Path(alias="warningId")],
+    body: WarningCommentIn,
+    user: CurrentUser,
+    db: Db,
+):
+    return _write(
+        db,
+        lambda: warning_payload(
+            db, warning_legal_confirm(db, warning_id, user, body.comment), True
+        ),
+    )
+
+
+@router.post("/warnings/{warningId}/legal-withdraw")
+def withdraw_warning_legal(
+    warning_id: Annotated[int, Path(alias="warningId")],
+    body: WarningCommentIn,
+    user: CurrentUser,
+    db: Db,
+):
+    return _write(
+        db,
+        lambda: warning_payload(
+            db, warning_legal_withdraw(db, warning_id, user, body.comment), True
+        ),
+    )
+
+
+@router.post("/warnings/{warningId}/risk-activate")
+def activate_warning_risk(
+    warning_id: Annotated[int, Path(alias="warningId")],
+    body: WarningActivateIn,
+    user: CurrentUser,
+    db: Db,
+):
+    return _write(
+        db,
+        lambda: warning_payload(
+            db, warning_risk_activate(db, warning_id, user, body.due_at, body.comment), True
+        ),
+    )
+
+
+@router.post("/warnings/{warningId}/waive")
+def waive_warning(
+    warning_id: Annotated[int, Path(alias="warningId")],
+    body: WarningCommentIn,
+    user: CurrentUser,
+    db: Db,
+):
+    return _write(db, lambda: warning_payload(db, warning_waive(db, warning_id, user, body.comment), True))
+
+
+@router.post("/warnings/{warningId}/acknowledge")
+def acknowledge_warning(
+    warning_id: Annotated[int, Path(alias="warningId")], user: CurrentUser, db: Db
+):
+    return _write(db, lambda: warning_payload(db, warning_acknowledge(db, warning_id, user)))
+
+
+@router.post("/warnings/{warningId}/close")
+def close_warning(
+    warning_id: Annotated[int, Path(alias="warningId")],
+    body: WarningCommentIn,
+    user: CurrentUser,
+    db: Db,
+):
+    return _write(db, lambda: warning_payload(db, warning_close(db, warning_id, user, body.comment), True))
+
+
+@router.post("/warnings/{warningId}/reopen")
+def reopen_warning(
+    warning_id: Annotated[int, Path(alias="warningId")],
+    body: WarningReopenIn,
+    user: CurrentUser,
+    db: Db,
+):
+    return _write(
+        db,
+        lambda: warning_payload(
+            db, warning_reopen(db, warning_id, user, body.due_at, body.comment), True
+        ),
+    )
+
+
 def _review(db: Session, review_id: int) -> ReviewRecord:
     review = db.scalar(select(ReviewRecord).where(ReviewRecord.id == review_id).with_for_update())
     if not review:
@@ -629,6 +831,8 @@ def patch_risk(
     risk_id: Annotated[int, Path(alias="riskId")], body: RiskIn, user: CurrentUser, db: Db
 ):
     if user.role not in {LEGAL, RISK}:
+        raise fail("REVIEW_ROLE_NOT_ALLOWED")
+    if user.role == LEGAL and "risk_status" in body.model_fields_set:
         raise fail("REVIEW_ROLE_NOT_ALLOWED")
 
     def go():
@@ -910,6 +1114,30 @@ def admin_list_users(
     return result({"items": [admin_public_user(row) for row in rows], "total": total})
 
 
+@router.post("/users")
+def admin_create_user(body: UserCreateIn, user: CurrentUser, db: Db) -> dict[str, object]:
+    require_admin(user)
+
+    def go() -> dict[str, object]:
+        if db.scalar(select(User).where(User.username == body.username)) is not None:
+            raise fail("USER_USERNAME_EXISTS")
+        target = User(
+            username=body.username,
+            password_hash=hash_password(body.password),
+            role=body.role,
+            status="active",
+        )
+        db.add(target)
+        db.flush()
+        after = admin_public_user(target)
+        add_admin_log(
+            db, user, ADMIN_ACTIONS["userCreated"], "user", target.id, None, after
+        )
+        return after
+
+    return _admin_write(db, go, "USER_USERNAME_EXISTS")
+
+
 @router.get("/users/{userId}")
 def admin_get_user(
     user_id: Annotated[int, Path(alias="userId")], user: CurrentUser, db: Db
@@ -1151,6 +1379,8 @@ def admin_create_rule(
             rule_content=body.rule_content,
             standard_clause_id=body.standard_clause_id,
             status=body.config_status,
+            warning_enabled=body.warning_enabled,
+            warning_due_hours=body.warning_due_hours,
         )
         db.add(rule)
         db.flush()

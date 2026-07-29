@@ -64,6 +64,24 @@ class UserUpdateIn(Schema):
         return self
 
 
+class UserCreateIn(Schema):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=4, max_length=256)
+    role: Role = "user"
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def trim_username(cls, value: object) -> object:
+        return _trim(value)
+
+    @field_validator("role")
+    @classmethod
+    def known_role(cls, value: str) -> str:
+        if value not in ROLES:
+            raise ValueError("invalid role")
+        return value
+
+
 class StandardClauseCreateIn(Schema):
     name: str = Field(min_length=1, max_length=100)
     contract_type: ContractType
@@ -134,6 +152,8 @@ class RiskRuleCreateIn(Schema):
     rule_content: str = Field(min_length=1)
     standard_clause_id: int | None = Field(default=None, gt=0)
     config_status: UserStatus = "active"
+    warning_enabled: bool = False
+    warning_due_hours: int | None = Field(default=None, gt=0)
 
     @field_validator("rule_code", "name", "rule_content", mode="before")
     @classmethod
@@ -170,6 +190,8 @@ class RiskRuleUpdateIn(Schema):
     rule_content: str | None = Field(default=None, min_length=1)
     standard_clause_id: int | None = Field(default=None, gt=0)
     config_status: UserStatus | None = None
+    warning_enabled: bool | None = None
+    warning_due_hours: int | None = Field(default=None, gt=0)
 
     @field_validator("rule_code", "name", "rule_content", mode="before")
     @classmethod
@@ -201,7 +223,7 @@ class RiskRuleUpdateIn(Schema):
     def has_change(self):
         if not self.model_fields_set:
             raise ValueError("one editable field is required")
-        required = self.model_fields_set - {"standard_clause_id"}
+        required = self.model_fields_set - {"standard_clause_id", "warning_due_hours"}
         if any(getattr(self, field) is None for field in required):
             raise ValueError("editable fields cannot be null")
         return self
