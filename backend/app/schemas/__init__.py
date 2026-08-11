@@ -1,0 +1,1 @@
+"""Pydantic external API schemas."""

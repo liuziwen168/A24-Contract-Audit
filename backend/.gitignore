@@ -1,0 +1,7 @@
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.tmp/
+storage/
+__pycache__/
